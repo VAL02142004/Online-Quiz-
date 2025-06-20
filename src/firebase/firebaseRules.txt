@@ -1,0 +1,97 @@
+// Firestore Rules - Copy these rules to your Firebase console
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions for role checking
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isSignedIn() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    function isTeacher() {
+      return isSignedIn() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+    }
+    
+    function isStudent() {
+      return isSignedIn() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student';
+    }
+    
+    function isUser(userId) {
+      return request.auth.uid == userId;
+    }
+    
+    // Users collection rules
+    match /users/{userId} {
+      // Anyone can read their own profile
+      // Admins can read and write all profiles
+      // Teachers and students can only read/write their own profiles
+      allow read: if isUser(userId) || isAdmin();
+      allow create: if isAdmin() || (isSignedIn() && !exists(/databases/$(database)/documents/users/$(userId)));
+      allow update: if isAdmin() || isUser(userId);
+      allow delete: if isAdmin();
+    }
+    
+    // Courses collection rules
+    match /courses/{courseId} {
+      // Anyone signed in can read courses
+      // Only teachers who own the course or admins can update/delete
+      allow read: if isSignedIn();
+      allow create: if isTeacher() || isAdmin();
+      allow update, delete: if isAdmin() || (isTeacher() && resource.data.teacherId == request.auth.uid);
+    }
+    
+    // Enrollments collection rules
+    match /enrollments/{enrollmentId} {
+      // Students can read their own enrollments
+      // Teachers can read enrollments for their courses
+      // Admins can read all enrollments
+      allow read: if isAdmin() || 
+        (isTeacher() && resource.data.courseTeacherId == request.auth.uid) || 
+        (isStudent() && resource.data.studentId == request.auth.uid);
+      
+      allow create: if isStudent();
+      allow update: if isAdmin() || 
+        (isTeacher() && resource.data.courseTeacherId == request.auth.uid) || 
+        (isStudent() && resource.data.studentId == request.auth.uid && 
+         !("status" in request.resource.data) && resource.data.status == request.resource.data.status);
+      allow delete: if isAdmin() || (isStudent() && resource.data.studentId == request.auth.uid);
+    }
+    
+    // Quizzes collection rules
+    match /quizzes/{quizId} {
+      // Teachers can create/read/update/delete their own quizzes
+      // Students can only read quizzes for courses they're enrolled in
+      // Admins can do anything
+      allow read: if isAdmin() || 
+        (isTeacher() && resource.data.teacherId == request.auth.uid) || 
+        (isStudent() && exists(/databases/$(database)/documents/enrollments/$(request.auth.uid + "_" + resource.data.courseId)));
+      
+      allow create: if isTeacher() || isAdmin();
+      allow update, delete: if isAdmin() || (isTeacher() && resource.data.teacherId == request.auth.uid);
+    }
+    
+    // Quiz results collection rules
+    match /quizResults/{resultId} {
+      // Students can read and create their own results
+      // Teachers can read results for their quizzes
+      // Admins can read all results
+      allow read: if isAdmin() || 
+        (isTeacher() && resource.data.teacherId == request.auth.uid) || 
+        (isStudent() && resource.data.studentId == request.auth.uid);
+      
+      allow create: if isStudent() && request.resource.data.studentId == request.auth.uid;
+      allow update: if isAdmin();
+      allow delete: if isAdmin() || (isTeacher() && resource.data.teacherId == request.auth.uid);
+    }
+  }
+}
